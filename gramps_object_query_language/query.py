@@ -1562,6 +1562,20 @@ _ORDERING_OPS = frozenset({"<", "<=", ">", ">="})
 _NULL_SAFE_OPS = {"=": "IS NOT DISTINCT FROM", "!=": "IS DISTINCT FROM"}
 
 
+def _like_op(dialect: Optional[Dialect]) -> str:
+    """The case-insensitive `LIKE` operator for `dialect`.
+
+    SQLite's plain `LIKE` is already case-insensitive (ASCII only), and
+    `evaluator.py` deliberately mirrors that; PostgreSQL's `LIKE` is
+    case-*sensitive*, so the same `like(...)`/substring-`in` condition would
+    match different rows there. PostgreSQL's `ILIKE` closes that gap (its
+    case folding is Unicode-aware rather than ASCII-only, which -- if
+    anything -- agrees more closely with the evaluator's `re.IGNORECASE`/
+    `.lower()` than SQLite does).
+    """
+    return "ILIKE" if dialect == Dialect.POSTGRESQL else "LIKE"
+
+
 def _coerce_bool_literal(column: ColumnRef, value: Any, spec: ObjectTypeSpec) -> Any:
     """`value`, with a Python `bool` converted to `int` if `column` is a flat
     (non-JSON) secondary column of `boolean` schema type -- e.g. `private`.
@@ -1630,7 +1644,7 @@ class Comparison:
         # JsonPath/RelatedObject instance, neither bool nor numeric, so it
         # still renders as TEXT on both sides via the existing type checks).
         cast_hint = 0 if is_field_comparison and self.op in _ORDERING_OPS else self.value
-        sql_op = _NULL_SAFE_OPS.get(self.op, self.op)
+        sql_op = self._sql_op(dialect)
         column_sql, column_params = _render_column(
             self.column, spec, dialect, value=cast_hint, treeid=treeid
         )
@@ -1659,6 +1673,9 @@ class Comparison:
             literal = _coerce_bool_literal(self.column, self.value, spec)
             comparison_params = column_params + [literal]
         return comparison_sql, comparison_params
+
+    def _sql_op(self, dialect: Optional[Dialect]) -> str:
+        return _NULL_SAFE_OPS.get(self.op, self.op)
 
     def __eq__(self, other: object) -> bool:
         return (
@@ -1696,7 +1713,13 @@ class Gte(Comparison):
 
 
 class Like(Comparison):
+    """WHERE column LIKE <pattern> (SQLite) / column ILIKE <pattern>
+    (PostgreSQL) -- case-insensitive on both; see `_like_op`."""
+
     op = "LIKE"
+
+    def _sql_op(self, dialect: Optional[Dialect]) -> str:
+        return _like_op(dialect)
 
 
 class Regex(Comparison):
@@ -1790,6 +1813,9 @@ class Contains(Comparison):
     that follow it) -- both dialects support `REPLACE`/`||` identically, so
     there's no per-dialect branch needed here, unlike most of this module's
     other field-crossing rendering.
+
+    Rendered as `ILIKE` on PostgreSQL, so the test is case-insensitive on
+    both dialects, same as `Like` -- see `_like_op`.
     """
 
     op = "LIKE"
@@ -1804,6 +1830,7 @@ class Contains(Comparison):
         # `collation` is accepted, not used -- a substring test has no
         # collation-sensitive form; see Regex.compile's own note on why
         # every leaf still has to accept it.
+        like_op = _like_op(dialect)
         if isinstance(self.value, (JsonPath, RelatedObject, FlatColumnRef)):
             # Any string content works as the cast hint here -- Contains
             # always wants a TEXT extraction (LIKE has no numeric/boolean
@@ -1820,7 +1847,7 @@ class Contains(Comparison):
                 f"'%', '\\%'), '_', '\\_')"
             )
             return (
-                f"{column_sql} LIKE '%' || {escaped} || '%' ESCAPE '\\'",
+                f"{column_sql} {like_op} '%' || {escaped} || '%' ESCAPE '\\'",
                 column_params + value_params,
             )
         escaped = (
@@ -1830,7 +1857,7 @@ class Contains(Comparison):
         column_sql, column_params = _render_column(
             self.column, spec, dialect, value=pattern, treeid=treeid
         )
-        return f"{column_sql} LIKE ? ESCAPE '\\'", column_params + [pattern]
+        return f"{column_sql} {like_op} ? ESCAPE '\\'", column_params + [pattern]
 
 
 class In:

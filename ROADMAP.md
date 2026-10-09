@@ -93,12 +93,13 @@ does today.
   SQL-path limitation already has.
 
 **Cross-dialect behavior**
-- `like(...)` and the substring form of `in` both compile to a plain SQL
-  `LIKE`. SQLite's `LIKE` is case-insensitive by default for ASCII (and the
-  `evaluator.py` path deliberately mirrors that); PostgreSQL's `LIKE` is
-  case-*sensitive* by default. Nothing in the compiler accounts for this --
-  the same `where_expr` string can match different rows depending on which
-  dialect executes it. No test currently exercises this gap.
+- ~~`like(...)` and the substring form of `in` match case-insensitively on
+  SQLite but case-sensitively on PostgreSQL~~ -- **Done**: both now render
+  `ILIKE` on PostgreSQL (`query.py::_like_op`), plain `LIKE` on SQLite. One
+  residual difference: SQLite only folds ASCII letters, while PostgreSQL's
+  `ILIKE` (and the `evaluator.py` path's `re.IGNORECASE`/`.lower()`) fold
+  non-ASCII letters too. Covered by SQL-shape tests only -- nothing runs
+  against a real PostgreSQL.
 - `regex(...)` (see Done below) doesn't have this particular gap -- both
   dialects match case-sensitively -- but has a *syntax* gap instead: SQLite
   runs the pattern through Python's own `re` (via gramps core's registered
@@ -1482,10 +1483,6 @@ it" rule).
   "a child with the same surname as the father") -- not supported; would
   need the condition's column resolution to see two rows (target *and*
   outer) at once, which nothing here does today.
-- **LIKE case-sensitivity parity across dialects** -- smallest fix here:
-  render `ILIKE` on PostgreSQL for `like(...)`/substring-`in`, or apply a
-  case-insensitive collation. Needs a test that actually runs both dialects
-  and compares results, since nothing currently catches this gap.
 - **Duplicate `RelatedObject` subqueries across `And` legs** -- a chained
   comparison against the same relationship path
   (`Date(...) < mother.birth.sortval < Date(...)`) renders the *entire*
@@ -1525,9 +1522,7 @@ purposes. Only `len()`, `any()`, M (the correlated-`ChildRef` gap behind
 difficulty ratings arrived at through actual layer-by-layer scoping (see
 their sections above); the rest are estimates by analogy to those two and to
 `count()`'s actual implementation cost, not independently measured the same
-way. (LIKE
-case-sensitivity parity is deliberately not in this table -- it's a
-database/collation concern, not a `where_expr` language gap.)
+way.
 
 Each row is lettered so the dependency analysis right below it can refer
 back to individual items. Letters are kept stable as items get implemented

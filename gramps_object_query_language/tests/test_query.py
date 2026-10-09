@@ -1005,6 +1005,70 @@ def test_ordering_and_like_and_in_ops_unaffected_by_null_safe_rewrite():
     assert "gender IN (?, ?)" in sql
 
 
+# --- LIKE case-insensitivity across dialects ----------------------------------
+#
+# SQLite's plain LIKE is case-insensitive (ASCII); PostgreSQL's is
+# case-sensitive, so both `Like` and `Contains` render `ILIKE` there instead.
+
+
+def test_like_sqlite_renders_plain_like():
+    sql, params = compile_query(
+        PERSON, Query(select=["handle"], where=Like("surname", "a%")), dialect=Dialect.SQLITE
+    )
+    assert "surname LIKE ?" in sql
+    assert "ILIKE" not in sql
+    assert params[0] == "a%"
+
+
+def test_like_postgresql_renders_ilike():
+    sql, params = compile_query(
+        PERSON, Query(select=["handle"], where=Like("surname", "a%")), dialect=Dialect.POSTGRESQL
+    )
+    assert "surname ILIKE ?" in sql
+    assert params[0] == "a%"
+
+
+def test_like_field_vs_field_postgresql_renders_ilike():
+    sql, _ = compile_query(
+        PERSON,
+        Query(select=["handle"], where=Like("surname", FlatColumnRef("given_name"))),
+        dialect=Dialect.POSTGRESQL,
+    )
+    assert "surname ILIKE given_name" in sql
+
+
+def test_contains_postgresql_renders_ilike():
+    sql, params = compile_query(
+        PERSON, Query(select=["handle"], where=Contains("surname", "mit")), dialect=Dialect.POSTGRESQL
+    )
+    assert "surname ILIKE ? ESCAPE '\\'" in sql
+    assert params[0] == "%mit%"
+
+
+def test_contains_field_vs_field_postgresql_renders_ilike():
+    sql, _ = compile_query(
+        PERSON,
+        Query(select=["handle"], where=Contains("surname", FlatColumnRef("given_name"))),
+        dialect=Dialect.POSTGRESQL,
+    )
+    assert "surname ILIKE '%' || " in sql
+    assert " LIKE " not in sql
+
+
+def test_contains_sqlite_matches_case_insensitively_end_to_end():
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE person (handle TEXT, surname TEXT)")
+    conn.executemany(
+        "INSERT INTO person VALUES (?, ?)", [("p1", "Smith"), ("p2", "Jones")]
+    )
+    sql, params = compile_query(
+        PERSON, Query(select=["handle"], where=Contains("surname", "SMI")), dialect=Dialect.SQLITE
+    )
+    assert conn.execute(sql, params).fetchall() == [("p1",)]
+
+
 # --- Regex --------------------------------------------------------------
 #
 # Dialect-sensitive, like JsonPath/RelatedObject rendering -- SQLite has no
