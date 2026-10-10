@@ -180,6 +180,7 @@ from .query import (
     resolve_column_path,
     resolve_length_path,
     resolve_ref_string,
+    validate_like_pattern,
 )
 
 # Namespace -> ObjectTypeSpec. Both the lowercase form and the actual Gramps
@@ -783,6 +784,10 @@ def _translate_like_call(node: ast.Call, spec: ObjectTypeSpec) -> dict:
     pattern = _translate_value(node.args[1])
     if not isinstance(pattern, str):
         raise QueryLangError("like(...)'s second argument must be a string literal")
+    try:
+        validate_like_pattern(pattern)
+    except QueryError as error:
+        raise QueryLangError(str(error)) from error
     return {"column": column, "op": "like", "value": pattern}
 
 

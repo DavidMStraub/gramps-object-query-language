@@ -1565,15 +1565,31 @@ _NULL_SAFE_OPS = {"=": "IS NOT DISTINCT FROM", "!=": "IS DISTINCT FROM"}
 def _like_op(dialect: Optional[Dialect]) -> str:
     """The case-insensitive `LIKE` operator for `dialect`.
 
-    SQLite's plain `LIKE` is already case-insensitive (ASCII only), and
-    `evaluator.py` deliberately mirrors that; PostgreSQL's `LIKE` is
-    case-*sensitive*, so the same `like(...)`/substring-`in` condition would
-    match different rows there. PostgreSQL's `ILIKE` closes that gap (its
-    case folding is Unicode-aware rather than ASCII-only, which -- if
-    anything -- agrees more closely with the evaluator's `re.IGNORECASE`/
-    `.lower()` than SQLite does).
+    SQLite's plain `LIKE` is already case-insensitive; PostgreSQL's `LIKE`
+    is case-*sensitive*, so the same `like(...)`/substring-`in` condition
+    would match different rows there without `ILIKE`. One residual gap
+    remains: SQLite only folds the 26 ASCII letters, while PostgreSQL's
+    `ILIKE` and `evaluator.py`'s `re.IGNORECASE`/`.lower()` fold non-ASCII
+    letters too -- `like(surname, 'é%')` matches `"Élise"` on PostgreSQL and
+    in the evaluator, but not on SQLite.
     """
     return "ILIKE" if dialect == Dialect.POSTGRESQL else "LIKE"
+
+
+def validate_like_pattern(pattern: str) -> None:
+    """Reject a `like(...)` pattern ending in a lone, unescaped `\\`.
+
+    `Like` renders `ESCAPE '\\'`, so `\\` escapes the character after it --
+    a trailing one escapes nothing. PostgreSQL raises an error for that
+    ("LIKE pattern must not end with escape character") while SQLite just
+    matches nothing, so it's rejected up front instead of diverging.
+    """
+    trailing = len(pattern) - len(pattern.rstrip("\\"))
+    if trailing % 2:
+        raise QueryError(
+            f"like(...) pattern must not end with an unescaped '\\' "
+            f"(use '\\\\' for a literal backslash): {pattern!r}"
+        )
 
 
 def _coerce_bool_literal(column: ColumnRef, value: Any, spec: ObjectTypeSpec) -> Any:
@@ -1713,10 +1729,32 @@ class Gte(Comparison):
 
 
 class Like(Comparison):
-    """WHERE column LIKE <pattern> (SQLite) / column ILIKE <pattern>
-    (PostgreSQL) -- case-insensitive on both; see `_like_op`."""
+    """WHERE column LIKE <pattern> ESCAPE '\\' (SQLite) / column ILIKE
+    <pattern> ESCAPE '\\' (PostgreSQL) -- case-insensitive on both; see
+    `_like_op`.
+
+    `\\` escapes the next character (`'100\\%'` matches a literal `100%`), on
+    every backend: PostgreSQL treats `\\` as the escape character by default,
+    SQLite only with an explicit `ESCAPE` clause, so it's spelled out on
+    both, and `evaluator.py`'s `_like_to_regex` follows the same rule.
+    """
 
     op = "LIKE"
+
+    def __init__(self, column: ColumnRef, value: Any):
+        if isinstance(value, str):
+            validate_like_pattern(value)
+        super().__init__(column, value)
+
+    def compile(
+        self,
+        spec: ObjectTypeSpec,
+        dialect: Optional[Dialect] = None,
+        treeid: Optional[int] = None,
+        collation: Optional[str] = None,
+    ) -> Tuple[str, list]:
+        sql, params = super().compile(spec, dialect, treeid, collation)
+        return f"{sql} ESCAPE '\\'", params
 
     def _sql_op(self, dialect: Optional[Dialect]) -> str:
         return _like_op(dialect)
@@ -1830,7 +1868,7 @@ class Contains(Comparison):
         # `collation` is accepted, not used -- a substring test has no
         # collation-sensitive form; see Regex.compile's own note on why
         # every leaf still has to accept it.
-        like_op = _like_op(dialect)
+        like_op = self._sql_op(dialect)
         if isinstance(self.value, (JsonPath, RelatedObject, FlatColumnRef)):
             # Any string content works as the cast hint here -- Contains
             # always wants a TEXT extraction (LIKE has no numeric/boolean
@@ -1858,6 +1896,9 @@ class Contains(Comparison):
             self.column, spec, dialect, value=pattern, treeid=treeid
         )
         return f"{column_sql} {like_op} ? ESCAPE '\\'", column_params + [pattern]
+
+    def _sql_op(self, dialect: Optional[Dialect]) -> str:
+        return _like_op(dialect)
 
 
 class In:

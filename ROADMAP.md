@@ -93,13 +93,16 @@ does today.
   SQL-path limitation already has.
 
 **Cross-dialect behavior**
-- ~~`like(...)` and the substring form of `in` match case-insensitively on
-  SQLite but case-sensitively on PostgreSQL~~ -- **Done**: both now render
-  `ILIKE` on PostgreSQL (`query.py::_like_op`), plain `LIKE` on SQLite. One
-  residual difference: SQLite only folds ASCII letters, while PostgreSQL's
-  `ILIKE` (and the `evaluator.py` path's `re.IGNORECASE`/`.lower()`) fold
-  non-ASCII letters too. Covered by SQL-shape tests only -- nothing runs
-  against a real PostgreSQL.
+- `like(...)` and the substring form of `in` render `ILIKE` on PostgreSQL
+  and plain `LIKE` on SQLite (`query.py::_like_op`), so both ignore case on
+  both dialects. `like(...)` also renders `ESCAPE '\'` on both, and the
+  evaluator honors the same `\` escapes, so `\%` means a literal `%`
+  everywhere. SQLite and the evaluator are checked against each other on
+  real data (`test_sql_and_evaluator_agree_on_like_and_contains`).
+  PostgreSQL only has SQL-shape tests -- see the parity-test backlog item
+  below. One known difference remains: SQLite only folds ASCII letters,
+  while PostgreSQL's `ILIKE` and the evaluator fold non-ASCII letters too
+  (`'é%'` matches `"Élise"` on those two but not on SQLite).
 - `regex(...)` (see Done below) doesn't have this particular gap -- both
   dialects match case-sensitively -- but has a *syntax* gap instead: SQLite
   runs the pattern through Python's own `re` (via gramps core's registered
@@ -1483,6 +1486,13 @@ it" rule).
   "a child with the same surname as the father") -- not supported; would
   need the condition's column resolution to see two rows (target *and*
   outer) at once, which nothing here does today.
+- **PostgreSQL parity test for `like(...)`/substring `in`** -- the
+  `ILIKE`/`ESCAPE` rendering is only covered by SQL-shape tests; nothing
+  runs it against a real PostgreSQL. Needs a PostgreSQL in CI (service
+  container, or a test skipped unless a DSN is set), then the same cases
+  as `test_sql_and_evaluator_agree_on_like_and_contains`. Note for anyone
+  indexing these columns: a plain btree can serve `LIKE 'Smi%'` (with
+  `text_pattern_ops`) but not `ILIKE`; a trigram index can serve both.
 - **Duplicate `RelatedObject` subqueries across `And` legs** -- a chained
   comparison against the same relationship path
   (`Date(...) < mother.birth.sortval < Date(...)`) renders the *entire*
