@@ -209,8 +209,8 @@ def test_like_call_non_string_pattern_rejected():
 
 
 def test_like_call_trailing_unescaped_backslash_rejected():
-    with pytest.raises(QueryLangError, match="unescaped"):
-        parse_expr("person", r"like(primary_name.first_name, 'Jo\\')")
+    with pytest.raises(QueryError, match="unescaped"):
+        compile_expr("person", r"like(primary_name.first_name, 'Jo\\')")
 
 
 def test_like_call_escaped_wildcard_kept_as_written():

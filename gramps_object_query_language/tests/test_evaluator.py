@@ -579,6 +579,7 @@ def like_db():
         "percent": "Paid 100%",
         "hundred": "Paid 1000",
         "backslash": "Back\\slash",
+        "no_backslash": "Backslash",
         "underscore": "Under_score",
         "newline": "Multi\nline",
         "accented": "Élise",
@@ -610,6 +611,7 @@ def test_sql_and_evaluator_agree_on_like_and_contains(like_db):
         Like("surname", "paid 100\\%"),  # literal % -- not "Paid 1000"
         Like("surname", "paid 100%"),  # wildcard % -- both
         Like("surname", "back\\\\slash"),  # escaped backslash
+        Like("surname", "back\\slash"),  # lone backslash escapes 's' -- no literal '\'
         Like("surname", "under\\_score"),
         Like("surname", "multi%"),  # % spans the newline
         Like("surname", "multi_line"),  # _ matches the newline
@@ -635,6 +637,11 @@ def test_sql_and_evaluator_agree_on_like_and_contains(like_db):
     assert evaluate_where(db, people["percent"], Like("surname", "paid 100\\%"), PERSON)
     assert not evaluate_where(db, people["hundred"], Like("surname", "paid 100\\%"), PERSON)
     assert evaluate_where(db, people["newline"], Like("surname", "multi%"), PERSON)
+    # A lone `\` before an ordinary character escapes it rather than
+    # matching a literal backslash -- a change from SQLite's old no-ESCAPE
+    # rendering, where the pattern `back\slash` matched "Back\slash" instead.
+    assert evaluate_where(db, people["no_backslash"], Like("surname", "back\\slash"), PERSON)
+    assert not evaluate_where(db, people["backslash"], Like("surname", "back\\slash"), PERSON)
 
 
 # --- CollectionCount / count(...) (Collection cardinality) --------------------

@@ -1576,13 +1576,19 @@ def _like_op(dialect: Optional[Dialect]) -> str:
     return "ILIKE" if dialect == Dialect.POSTGRESQL else "LIKE"
 
 
-def validate_like_pattern(pattern: str) -> None:
+def _validate_like_pattern(pattern: str) -> None:
     """Reject a `like(...)` pattern ending in a lone, unescaped `\\`.
 
     `Like` renders `ESCAPE '\\'`, so `\\` escapes the character after it --
     a trailing one escapes nothing. PostgreSQL raises an error for that
     ("LIKE pattern must not end with escape character") while SQLite just
     matches nothing, so it's rejected up front instead of diverging.
+
+    The only place a `like(...)` pattern is checked: called from
+    `Like.__init__`, which every route builds before anything runs -- a
+    `where_expr` string, a raw `where` JSON body (both via
+    `query_lang.where_list_to_ast`), and direct Python API use. Add any
+    future pattern rule here, not in the parser.
     """
     trailing = len(pattern) - len(pattern.rstrip("\\"))
     if trailing % 2:
@@ -1743,7 +1749,7 @@ class Like(Comparison):
 
     def __init__(self, column: ColumnRef, value: Any):
         if isinstance(value, str):
-            validate_like_pattern(value)
+            _validate_like_pattern(value)
         super().__init__(column, value)
 
     def compile(
